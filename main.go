@@ -1,5 +1,9 @@
 package main
 
+// #cgo pkg-config: python3
+// #include <Python.h>
+import "C"
+
 import (
 	"bytes"
 	"encoding/base64"
@@ -7,13 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/jpeg"
 	"image/png"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 
+	"github.com/DataDog/go-python3"
 	"github.com/bwmarrin/discordgo"
 	"github.com/nfnt/resize"
 )
@@ -125,15 +129,14 @@ func handleEmojiAdd(s *discordgo.Session, m *discordgo.MessageCreate) error {
 		return errors.New("The attached image must have an image URL.")
 	}
 
-	img, err := downloadImage("emote", imgUrl)
+	img, err := DownloadImage("emote", imgUrl)
 	// Verify it's okay to defer Close here.
 	defer img.Close()
 	if err != nil {
 		return err
 	}
 
-	// resize not working correctly yet
-	newImg, err := resizeImage(img)
+	newImg, err := ResizeImage(img)
 	defer newImg.Close()
 	if err != nil {
 		return err
@@ -147,15 +150,21 @@ func handleEmojiAdd(s *discordgo.Session, m *discordgo.MessageCreate) error {
 		// Resize to smaller size
 		fmt.Println("PANIC")
 	}
-
 	newImg.Seek(0, 0)
 
-	data, err := ioutil.ReadAll(newImg)
+	// Remove background
+	rembgImg, err := Py_RemoveBackground(newImg)
+	defer rembgImg.Close()
 	if err != nil {
-		fmt.Println("Error reading file:", err)
+		fmt.Println("Error removing background:", err)
 		return err
 	}
 
+	data, err := ioutil.ReadAll(rembgImg)
+	if err != nil {
+		fmt.Println("Error reading file into []byte:", err)
+		return err
+	}
 	// Encode the bytes to base64
 	encoded := base64.StdEncoding.EncodeToString(data)
 	emojiParams := discordgo.EmojiParams{
@@ -173,27 +182,46 @@ func handleEmojiAdd(s *discordgo.Session, m *discordgo.MessageCreate) error {
 	return nil
 }
 
-// Does not defer closing the output image file
-func resizeImage(img *os.File) (*os.File, error) {
-	imgFormat := getImageFormat(img)
-	if imgFormat == "" {
-		return nil, fmt.Errorf("Could not determine image format of file %s.", img.Name())
+func Py_RemoveBackground(img *os.File) (*os.File, error) {
+	defer python3.Py_Finalize()
+	python3.Py_Initialize()
+
+	// file, err := os.Open("../remove_background.py")
+	// if err != nil {
+	// 	fmt.Println("Error opening file:", err)
+	// 	return nil, fmt.Errorf("Error opening file:", err)
+	// }
+	// defer file.Close()
+
+	_, err := python3.PyRun_AnyFile("../remove_background.py")
+	if err != nil {
+		return nil, fmt.Errorf("Error removing background execution: ", err)
 	}
 
-	var decodedImg image.Image
-	var err error
-	if imgFormat == "PNG" {
-		decodedImg, err = png.Decode(img)
-		if err != nil {
-			fmt.Println("We have errored in decoding the png.")
-			fmt.Println(err.Error())
-			return nil, err
-		}
-	} else if imgFormat == "JPEG" {
-		decodedImg, err = jpeg.Decode(img)
-		if err != nil {
-			return nil, err
-		}
+	// dir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
+	// //...
+	// _ = python3.PyRun_SimpleString("import sys\nsys.path.append(\"" + dir + "\")")
+
+	// oImport := python3.PyImport_ImportModule("pyrembg") //ret val: new ref
+	// //...
+	// defer oImport.DecRef()
+	// oModule := python3.PyImport_AddModule("pyrembg") //ret val: borrowed ref (from oImport)
+
+	// rembgImg, err := os.Open("rembg-emote")
+	// if err != nil {
+	// 	fmt.Println("Error opening file:", err)
+	// 	return nil, fmt.Errorf("Error opening file:", err)
+	// }
+	// defer rembgImg.Close()
+
+	return nil, nil
+}
+
+// Does not defer closing the output image file
+func ResizeImage(img *os.File) (*os.File, error) {
+	decodedImg, _, err := image.Decode(img)
+	if err != nil {
+		return nil, fmt.Errorf("Error decoding image: %v", err)
 	}
 
 	resizedImg := resize.Resize(128, 128, decodedImg, resize.Lanczos3)
@@ -216,7 +244,7 @@ func resizeImage(img *os.File) (*os.File, error) {
 	return out, nil
 }
 
-func getImageFormat(img *os.File) string {
+func GetImageFormat(img *os.File) string {
 	// Read the first 8 bytes of the file
 	var header [8]byte
 	_, err := io.ReadFull(img, header[:])
@@ -225,7 +253,9 @@ func getImageFormat(img *os.File) string {
 		return ""
 	}
 
-	img.Seek(0, 0)
+	// Do this before or after it's called
+	// Shouldn't be this method's responsibility
+	// img.Seek(0, 0)
 
 	// Check the format signature
 	if bytes.Equal(header[:], []byte("\x89PNG\r\n\x1A\n")) {
@@ -238,8 +268,8 @@ func getImageFormat(img *os.File) string {
 }
 
 // Does not defer closing file
-func downloadImage(fileName, imageUrl string) (*os.File, error) {
-	//Get the response bytes from the url
+func DownloadImage(fileName, imageUrl string) (*os.File, error) {
+	// Get the response bytes from the url
 	response, err := http.Get(imageUrl)
 	if err != nil {
 		return nil, err
@@ -249,13 +279,13 @@ func downloadImage(fileName, imageUrl string) (*os.File, error) {
 	if response.StatusCode != 200 {
 		return nil, errors.New("Received non 200 response code")
 	}
-	//Create a empty file
+	// Create an empty file
 	file, err := os.Create(fileName)
 	if err != nil {
 		return nil, err
 	}
 
-	//Write the bytes to the file
+	// Write the bytes to the file
 	_, err = io.Copy(file, response.Body)
 	if err != nil {
 		return nil, err
