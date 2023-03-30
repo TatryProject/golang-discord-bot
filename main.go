@@ -16,8 +16,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"unsafe"
 
-	"github.com/DataDog/go-python3"
+	// "github.com/DataDog/go-python3"
 	"github.com/bwmarrin/discordgo"
 	"github.com/nfnt/resize"
 )
@@ -182,37 +183,92 @@ func handleEmojiAdd(s *discordgo.Session, m *discordgo.MessageCreate) error {
 	return nil
 }
 
+// NEED to set PYTHONPATH, PKG_CONFIG_PATH and LD_LIBRARY_PATH for python3 to work
 func Py_RemoveBackground(img *os.File) (*os.File, error) {
-	defer python3.Py_Finalize()
-	python3.Py_Initialize()
-
-	// file, err := os.Open("../remove_background.py")
-	// if err != nil {
-	// 	fmt.Println("Error opening file:", err)
-	// 	return nil, fmt.Errorf("Error opening file:", err)
-	// }
-	// defer file.Close()
-
-	_, err := python3.PyRun_AnyFile("../remove_background.py")
-	if err != nil {
-		return nil, fmt.Errorf("Error removing background execution: ", err)
-	}
+	// defer python3.Py_Finalize()
+	// python3.Py_Initialize()
 
 	// dir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
 	// //...
 	// _ = python3.PyRun_SimpleString("import sys\nsys.path.append(\"" + dir + "\")")
 
-	// oImport := python3.PyImport_ImportModule("pyrembg") //ret val: new ref
-	// //...
-	// defer oImport.DecRef()
-	// oModule := python3.PyImport_AddModule("pyrembg") //ret val: borrowed ref (from oImport)
+	// Issue: rembg reqs numpy 1.23.5 which doesn't support python 3.7
+	// Currently, Go thinks I'm using python 3.7
+	// python3.PyRun_SimpleString("from rembg import remove; print('hello world')")
+
+	pycodeGo := "from rembg import remove; print('hello world')"
+
+	defer C.Py_Finalize()
+	C.Py_Initialize()
+	pycodeC := C.CString(pycodeGo)
+	defer C.free(unsafe.Pointer(pycodeC))
+	C.PyRun_SimpleString(pycodeC)
+
+	// sys_path := python3.PySys_GetObject("path")
+	// Check what sys_path is here to see if maybe it's
+	// some other dir that doesn't contain rembg
+
+	// rembg := python3.PyImport_ImportModule("rembg")
+	// if rembg == nil {
+	// 	fmt.Println("Failed to import rembg module")
+	// 	return nil, nil
+	// }
+	// defer rembg.DecRef()
+	//  _ = python3.PyImport_AddModule("rembg")
+
+	// _ = python3.PyModule_GetDict(rembg)
+
+	// removeFn := python3.PyDict_GetItemString(oDict, "remove")
+
+	// // removeFn := rembg.GetAttrString("remove")
+	// defer removeFn.DecRef()
+
+	// _, err := python3.PyRun_AnyFile("pyrembg/remove_background.py")
+	// if err != nil {
+	// 	return nil, fmt.Errorf("Error removing background execution: %v", err)
+	// }
+	// _ = python3.PyTuple_New(1)
+	// imgPath := python3.PyUnicode_FromString("resized-emote")
+	// python3.PyTuple_SetItem(args, 0, imgPath)
+	// _ = removeFn.Call(args, python3.Py_None)
+
+	fmt.Println("CALL SUCCESSFUL!")
+
+	// Convert the `result` PyObject to a []uint8 slice
+	// pyBytes := result.Bytes()
+	// cBytes := python3.PyBytes_AsString(pyBytes)
+	// imgBytes := make([]byte, python3.PyBytes_Size(pyBytes))
+	// copy(imgBytes, cBytes)
+
+	// // Create a new bytes.Buffer and write the image bytes to it
+	// buffer := bytes.NewBuffer(imgBytes)
+
+	// // Use the image.Decode function to decode the image from the buffer
+	// rembgImg, _, err := image.Decode(buffer)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// out, err := os.Create("rembg-emote")
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// // defer out.Close()
+	// out.Seek(0, 0)
+
+	// // Encode the resized image as PNG
+	// err = png.Encode(out, rembgImg)
+	// if err != nil {
+	// 	fmt.Println("Error encoding!")
+	// 	return nil, err
+	// }
 
 	// rembgImg, err := os.Open("rembg-emote")
 	// if err != nil {
 	// 	fmt.Println("Error opening file:", err)
 	// 	return nil, fmt.Errorf("Error opening file:", err)
 	// }
-	// defer rembgImg.Close()
+	// // defer rembgImg.Close()
 
 	return nil, nil
 }

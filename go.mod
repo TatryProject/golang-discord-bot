@@ -4,7 +4,9 @@ go 1.19
 
 require (
 	github.com/DataDog/go-python3 v0.0.0-20211102160307-40adc605f1fe // indirect
+	github.com/aagacek2/go-python3 v0.0.0-20230218172351-5c1537b1e7ae // indirect
 	github.com/bwmarrin/discordgo v0.27.0 // indirect
+	github.com/christian-korneck/go-python3 v0.0.0-20200921060006-847aa92a90a5 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b // indirect
