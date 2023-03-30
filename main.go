@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,20 +17,23 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nfnt/resize"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 const TWO_HUNDRED_FIFTY_SIX_KB_IN_BYTES = 262144
 
 var (
-	Token     string
-	BotPrefix string
+	Token        string
+	BotPrefix    string
+	OpenAiApiKey string
 
 	config *configStruct
 )
 
 type configStruct struct {
-	Token     string `json:"Token"`
-	BotPrefix string `json:"BotPrefix"`
+	Token        string `json:"Token"`
+	BotPrefix    string `json:"BotPrefix"`
+	OpenAiApiKey string `json:"OpenAiApiKey"`
 }
 
 func main() {
@@ -61,6 +65,7 @@ func ReadConfig() error {
 	}
 	Token = config.Token
 	BotPrefix = config.BotPrefix
+	OpenAiApiKey = config.OpenAiApiKey
 
 	return nil
 }
@@ -115,6 +120,9 @@ func messageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 }
 
 func handleEmojiAdd(s *discordgo.Session, m *discordgo.MessageCreate) error {
+	fmt.Println("Handling emoji add")
+	ctx := context.Background()
+
 	if len(m.Attachments) == 0 {
 		return errors.New("Image attachment must be provided.")
 	}
@@ -139,16 +147,22 @@ func handleEmojiAdd(s *discordgo.Session, m *discordgo.MessageCreate) error {
 		return err
 	}
 
-	fileInfo, err := newImg.Stat()
+	// Remove Background
+	_, err = dallE2RemoveBackground(ctx, newImg)
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
-	if fileInfo.Size() > TWO_HUNDRED_FIFTY_SIX_KB_IN_BYTES {
-		// Resize to smaller size
-		fmt.Println("PANIC")
-	}
 
-	newImg.Seek(0, 0)
+	// fileInfo, err := newImg.Stat()
+	// if err != nil {
+	// 	return err
+	// }
+
+	// if fileInfo.Size() > TWO_HUNDRED_FIFTY_SIX_KB_IN_BYTES {
+	// 	// Resize to smaller size
+	// 	fmt.Println("PANIC")
+	// }
 
 	data, err := ioutil.ReadAll(newImg)
 	if err != nil {
@@ -158,19 +172,45 @@ func handleEmojiAdd(s *discordgo.Session, m *discordgo.MessageCreate) error {
 
 	// Encode the bytes to base64
 	encoded := base64.StdEncoding.EncodeToString(data)
-	emojiParams := discordgo.EmojiParams{
-		Name:  "GoBot",
-		Image: "data:image/png;base64," + encoded, // valid URI
-	}
-	emoji, err := s.GuildEmojiCreate(m.Message.GuildID, &emojiParams)
+
+	err = sendBase64ImageToDiscordChannel(encoded, s, m)
 	if err != nil {
-		fmt.Println("Error reading file:", err)
 		return err
 	}
 
-	_, _ = s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("<:%s>", emoji.APIName()))
+	newImg.Seek(0, 0)
 
 	return nil
+}
+
+// Does not defer closing file
+func downloadImage(fileName, imageUrl string) (*os.File, error) {
+	//Get the response bytes from the url
+	response, err := http.Get(imageUrl)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != 200 {
+		return nil, errors.New("Received non 200 response code")
+	}
+	//Create a empty file
+	file, err := os.Create(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	//Write the bytes to the file
+	_, err = io.Copy(file, response.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Go back to beginning of copied file
+	file.Seek(0, 0)
+
+	return file, nil
 }
 
 // Does not defer closing the output image file
@@ -237,32 +277,50 @@ func getImageFormat(img *os.File) string {
 	}
 }
 
-// Does not defer closing file
-func downloadImage(fileName, imageUrl string) (*os.File, error) {
-	//Get the response bytes from the url
-	response, err := http.Get(imageUrl)
+func dallE2RemoveBackground(ctx context.Context, img *os.File) ([]byte, error) {
+	client := openai.NewClient(OpenAiApiKey)
+
+	request := openai.ImageEditRequest{
+		Image:  img,
+		N:      1,
+		Prompt: "Remove the image's background such that it is transparent.",
+		Size:   "256x256",
+	}
+
+	response, err := client.CreateEditImage(ctx, request)
 	if err != nil {
-		return nil, err
+		return []byte{}, err
 	}
-	defer response.Body.Close()
 
-	if response.StatusCode != 200 {
-		return nil, errors.New("Received non 200 response code")
+	// fmt.Println(len(response.Data))
+	// url := response.Data[0].URL
+	// httpClient := &http.Client{
+	// 	Timeout: time.Second * 10,
+	// }
+
+	// // Make a request using the client
+	// req, _ := http.NewRequest("GET", url, nil)
+	// resp, _ := httpClient.Do(req)
+
+	return []byte{}, nil
+}
+
+func sendBase64ImageToDiscordChannel(
+	encodedImg string,
+	s *discordgo.Session,
+	m *discordgo.MessageCreate,
+) error {
+	emojiParams := discordgo.EmojiParams{
+		Name:  "GoBot",
+		Image: "data:image/png;base64," + encodedImg, // valid URI
 	}
-	//Create a empty file
-	file, err := os.Create(fileName)
+	emoji, err := s.GuildEmojiCreate(m.Message.GuildID, &emojiParams)
 	if err != nil {
-		return nil, err
+		fmt.Println("Error reading file:", err)
+		return err
 	}
 
-	//Write the bytes to the file
-	_, err = io.Copy(file, response.Body)
-	if err != nil {
-		return nil, err
-	}
+	_, _ = s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("<:%s>", emoji.APIName()))
 
-	// Go back to beginning of copied file
-	file.Seek(0, 0)
-
-	return file, nil
+	return nil
 }
